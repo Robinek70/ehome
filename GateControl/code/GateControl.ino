@@ -1,7 +1,9 @@
 #define MY_DEBUG
 #define MY_RADIO_NRF24
-#define MY_NODE_ID			10
-#define RF24_PA_LEVEL 		RF24_PA_MAX
+//#define MY_NODE_ID			10
+#define MY_NODE_ID			222
+//#define RF24_PA_LEVEL 		RF24_PA_MAX
+#define RF24_PA_LEVEL 		RF24_PA_MIN
 #define MY_REPEATER_FEATURE
 
 #include <MySensors.h> 
@@ -12,7 +14,7 @@
 //const char NODE_NAME[] = "Gate Control";
 #define	NODE_NAME	"Gate Control"
 //const char NODE_VER[] = "1.43.1";
-#define	NODE_VER	"2.0.3"
+#define	NODE_VER	"2.01.3"
 
 #define GATE_INDICATOR_PIN	2
 #define GATE_OPEN_PIN		4
@@ -36,7 +38,7 @@
 #define TEMP_ID		20
 
 #define DURATION_GATE_PULSE		1000	//ms
-#define DELAY_GATE_STATUS		10000	//ms
+#define DELAY_GATE_STATUS		30000UL	//ms
 #define MAX_ATTACHED_DS18B20	1
 #define TEMP_REPORT_INTERVAL	5000	//ms
 
@@ -119,7 +121,7 @@ void presentation()
 		present(TEMP_ID+i, S_TEMP);
 	}
 
-	isMetric = getConfig().isMetric;
+	isMetric = getControllerConfig().isMetric;
 }
 
 void setup()
@@ -167,9 +169,10 @@ void loop()
 			Serial.println("roznica gate 2000: ");
 			prev_status = is_gate_opened;
 			myresend(gateOpenMsg.set(is_gate_opened ? 1 : 0));
+			//send(gateOpenMsg.set(is_gate_opened ? 1 : 0));
 			start_gate_time = millis();
 			report_gate = true;
-			digitalWrite(TEST_LED_PIN, is_gate_opened ? HIGH : LOW);
+			//digitalWrite(TEST_LED_PIN, is_gate_opened ? HIGH : LOW);
 			gate_last_send = current_time;
 		}
 
@@ -191,6 +194,7 @@ void loop()
 		openDoor(false);
 	}
 	if(report_gate && (current_time > start_gate_time + DELAY_GATE_STATUS)) {
+		Serial.println("delayed try send");
 		report_gate=false;
 		myresend(gateOpenMsg.set(is_gate_opened ? 1 : 0));
 	}
@@ -248,7 +252,7 @@ void receive(const MyMessage &message) {
 			status = message.getBool();
 			Serial.print(", trying gate: ");
 			Serial.println(status);
-			if(status != is_gate_opened) {
+			if(status != is_gate_opened && (millis() - start_gate_time >3000UL)) {
 				// start moving gate
 				Serial.print(", PROCESSING...");
 				digitalWrite(GATE_OPEN_PIN, HIGH);
@@ -288,17 +292,26 @@ void openDoor(bool open) {
 	myresend(doorOpenMsg.set(open ? 1 : 0));
 }
 
+float dtt = 3;
 void startMeasureDS() {
 	for (int i=0; i<numSensors && i<MAX_ATTACHED_DS18B20; i++) {
 
 		// Fetch and round temperature to one decimal
 		float temperature = static_cast<float>(static_cast<int>((isMetric?sensors.getTempCByIndex(i):sensors.getTempFByIndex(i)) * 10.)) / 10.;
 
-		if (lastTemperature[i] != temperature && temperature != -127.00 && temperature != 85.00) {
+		
+		if (temperature != -127.00 && temperature != 85.00) {
 
-			// Send in the new temperature
-			myresend(tempMsg.setSensor(TEMP_ID+i).set(temperature,1));	
-			lastTemperature[i] = temperature;
+			if(lastTemperature[i] == 0) 
+				lastTemperature[i] = temperature;
+
+			temperature = (lastTemperature[i]*dtt + temperature)/(dtt + 1);
+
+			if (round(temperature*10) != round(lastTemperature[i]*10)) {
+				// Send in the new temperature
+				myresend(tempMsg.setSensor(TEMP_ID+i).set(temperature,1));	
+				lastTemperature[i] = temperature;
+			}
 		}
 	}
 	// Fetch temperatures from Dallas sensors

@@ -1,2 +1,6 @@
 /GateControl/code/*.filters
 /GateControl/code/*.suo
+.svn
+Debug
+*.suo
+__vm
