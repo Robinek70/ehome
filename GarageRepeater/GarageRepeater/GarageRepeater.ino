@@ -21,9 +21,7 @@
 #define STR(macro) QUOTE(macro)
 
 #define NODE_NAME		"Garage Repeater"
-#define NODE_VER		"0.03" STR(MY_RF24_PA_LEVEL)
-
-#define MAX_ATTACHED_DS18B20	4
+#define NODE_VER		"1.00" STR(MY_RF24_PA_LEVEL)
 
 //region Hardware
 
@@ -42,7 +40,7 @@ void before()
 	new RpPir(PIN_PIR);
 	new RpDs18b20(ONE_WIRE_BUS);
 	new RpLdr(PIN_LUX);
-	new RpContact(PIN_LUX);
+	new RpContact(PIN_DOOR);
 
 	rp_before();
 }
