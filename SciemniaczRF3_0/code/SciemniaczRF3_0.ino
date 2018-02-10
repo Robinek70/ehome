@@ -1,10 +1,14 @@
 #define MY_RADIO_NRF24
 //#define MY_NODE_ID		 9
 #define MY_RF24_PA_LEVEL	RF24_PA_HIGH
-#define MY_REPEATER_FEATURE 
+//#define MY_REPEATER_FEATURE 
 #define MY_BAUD_RATE		57600
 #define MY_SPECIAL_DEBUG
 
+
+//#define MY_SIGNING_SOFT
+//#define MY_SIGNING_SOFT_RANDOMSEED_PIN A6
+//#define MY_SIGNING_REQUEST_SIGNATURES
 
 #include <avr/pgmspace.h>
 //#include <avr/wdt.h>
@@ -18,7 +22,7 @@
 #define STR(macro) QUOTE(macro)
 
 #define NODE_NAME		"Dimm. Light Switch"
-#define NODE_VER		"3.02" STR(MY_RF24_PA_LEVEL)
+#define NODE_VER		"3.08" STR(MY_RF24_PA_LEVEL)
 //MY_RF24_PA_LEVEL
 
 #define CHILD_ID_LIGHT_SENSOR	0
@@ -69,6 +73,9 @@
 #define EE_DTT			EE_PIR_DELAY + 2	// 1 byte
 #define EE_FADE			EE_DTT + 1			// 1 byte
 #define EE_MINWAVES		EE_FADE + 1			// 1 byte
+#define EE_PING_UNIT	EE_MINWAVES + 1		// 1 byte
+#define EE_PING_TIME	EE_PING_UNIT + 1	// 1 byte
+
 #define EE_SW_DATA		100
 
 #define EE_SW_SAVED		0
@@ -143,6 +150,9 @@ byte MaxLights = 1;	// EE
 byte setByRemote = 0;
 int8_t temp_mode = 0;
 float lastTempSend = 0;
+uint32_t lastPing = 0;
+byte pingIntervalValue = 5;
+byte pingIntervalUnit = 'M';
 
 //PIR
 uint32_t lastSendPir1 = 0;
@@ -216,6 +226,11 @@ void EEReadByte(int pos, byte* data) {
 	if(tmp != 255) *data = tmp;
 }
 
+inline uint32_t calcTimestamp(char u, byte v) {
+			uint32_t multiple = u=='S'?1:(u=='M'?60:(u=='H'?60UL*60:(u=='D'?24UL*60*60:1)));
+			return multiple * v * ((u=='U')?1:1000);
+}
+
 byte tmp1, tmp2, tmp4;
 int tmp3;
 
@@ -246,6 +261,14 @@ void before() {
 	EEReadByte(EE_DTT, &dtt);
 	EEReadByte(EE_FADE, &fadeSpeed);
 	EEReadByte(EE_MINWAVES, &minWaves);
+	EEReadByte(EE_PING_UNIT, &pingIntervalUnit);
+	EEReadByte(EE_PING_TIME, &pingIntervalValue);
+	if(pingIntervalValue==0) {
+		pingIntervalValue=1;
+		pingIntervalUnit='H';
+	}
+
+	
 
 	/*EEReadByte(EE_CONFIG, &tmp1);
 	EEReadByte(EE_SWITCHES, &tmp2);
@@ -290,6 +313,11 @@ void presentation()
 	metric = getControllerConfig().isMetric;
 }
 
+void sendRequests() {
+	for(byte i=0;i<MaxLights;i++) {
+		  request(CHILD_ID_DIMMER + i, V_LIGHT);
+	  }
+}
 
 void setup() {
   Serial.println("Setup...");
@@ -308,6 +336,8 @@ void setup() {
   sei();
   
   Serial.println("Running...");
+
+  sendRequests();
 }
 
 volatile byte count;
@@ -512,6 +542,28 @@ void loop() {
 			}
 		} else lastSendPir2 = millis();
 	}
+
+	
+	if(millis() > lastPing + calcTimestamp((char)pingIntervalUnit, pingIntervalValue) /*60UL*1000*pingInterval*/ /*PING_INTERVAL*/) {
+	  //request(CHILD_ID_DIMMER, V_LIGHT);
+	  //_sendRoute(MyMessage &message)
+	  lastPing = millis();
+	  //if(!_sendRoute(build(_msgTmp, _nc.nodeId, 0, CHILD_ID_DIMMER, C_REQ, V_LIGHT, false).set(""))) {
+		//pingErrors++;
+		//lastPing -= PINGERROR_INTERVAL + 10*1000;
+	  //}
+	  
+	 // if(pingErrors>MAX_PING_ERRORS) {
+	//	  Serial.println("No Pings. Reboot.");
+	//	  while(1);	// watchdog
+	 // }
+	  
+	  
+	  /*for(byte i=0;i<MaxLights;i++) {
+		  request(CHILD_ID_DIMMER + i, V_LIGHT);
+	  }*/
+	  sendRequests();
+    }
 }
 
 byte switchPosition(struct LIGHTHW* light) {
@@ -550,7 +602,7 @@ void storeSwitchPosition(byte idx) {
 	saveState(EE_SW_DATA + EE_SW_INVERT + idx*EE_SW_DATA_SIZE,lights_hw[idx].invertSwitch);
 }
 
-const int v2Lx[] /*PROGMEM*/   = {  1024, 0,
+/*const int v2Lx[]  = {  1024, 0,
 					  112, 21,
 					  78 ,  70,
 					  42 ,  150,
@@ -581,6 +633,20 @@ int sensorToLx(int value) {
 		
 	}
 	return 0;
+}
+*/
+#define L_a_	-1.6477
+#define L_b_	7.873
+
+#define RP_LDR_V_REF	4.	// reference V
+#define RP_LDR_VCC		4.	// Vcc
+#define RP_LDR_R1		80.*1000	// R1 - PullUp value
+
+#define RP_LDR_R(_adc_)	(RP_LDR_R1/(RP_LDR_VCC/(adc *(RP_LDR_V_REF/1023.)) - 1))
+
+inline int sensorToLx(int adc) {
+	int lightLevel = pow(10,L_a_*log10(RP_LDR_R(adc))+L_b_);
+	return lightLevel;
 }
 
 void startMeasureDS() { 
@@ -645,6 +711,7 @@ const char cFade[] PROGMEM  =  {"Fade (f):"};
 const char cMinWaves[] PROGMEM  =  {"MinWaves (w):"};
 const char cSaved[] PROGMEM  =  {"Saved:"};
 const char cInverted[] PROGMEM  =  {"Inverted:"};
+const char cPing[] PROGMEM  =  {"PING:"};
 
 char buffer[20];
 
@@ -670,14 +737,38 @@ void reportCfg() {
 	myresend(var2Msg.set(myF(cFade, fadeSpeed)));
 	myresend(var2Msg.set(myF(cMinWaves, minWaves)));
 	myresend(var2Msg.set(myF(cTempSens, numSensors)));
+	myF(cPing, (char)pingIntervalUnit);
+	itoa(pingIntervalValue,buffer+strlen(buffer),10);
+	
+	//sprintf(buffer, "PING:%c%d", (char)pingIntervalUnit, pingIntervalValue);
+	myresend(var2Msg.set(buffer));
+
+	myresend(var2Msg.set(myF(cTempSens, numSensors)));
 
 	for( byte i=0;i<MaxLights;i++) {
 		LIGHTHW* light_hw = &lights_hw[i];
-		myresend(var2Msg.set(myF(cSaved, light_hw->savedLevel)));
+		myresend(var2Msg.setSensor(CHILD_ID_DIMMER + i).set(myF(cSaved, light_hw->savedLevel)));
 		myresend(var2Msg.set(myF(cInverted, light_hw->invertSwitch)));
 	}
 }
 
+char* myF(const char* s, char v) {
+	char *p = buffer;
+	for(char c; (c = pgm_read_byte(s));s++) *(p++)=c;
+	*(p++) = v;
+	*p = '\0';
+
+	return buffer;
+}
+char* myF(const char* s, byte v) {
+	char *p = buffer;
+	for(char c; (c = pgm_read_byte(s));s++) *(p++)=c;
+	//myF(s);
+	//byte len = strlen(buffer);
+	itoa(v,p,10);
+
+	return buffer;
+}
 char* myF(const char* s, int v) {
 	char *p = buffer;
 	for(char c; (c = pgm_read_byte(s));s++) *(p++)=c;
@@ -693,6 +784,16 @@ char* myF(const char* s, char* t) {
 	return buffer;
 }
 void (*softReset) (void) = 0;
+
+byte mystrncmp(const char* flash, const char * s, byte count) {
+	byte i=0;
+	for(char c; (c = pgm_read_byte(flash)) && i<count;flash++,s++,i++) {
+		if(c!=*s) {
+			return 0;
+		}
+	}
+	return i==count;
+}
 
 void receive(const MyMessage &message) {
 
@@ -712,7 +813,7 @@ void receive(const MyMessage &message) {
 		Serial.print( ", from " ); 
 
 		Serial.println( lights_hw[idx].current);
-		myresend( var2Msg.set(onOff?"dimmer ON":"dimmer OFF") );
+		myresend( var2Msg.setSensor(message.sensor).set(onOff?"dimmer ON":"dimmer OFF") );
 		switchTo(idx, onOff);
 
 		lights_hw[idx].targetLevel = requestedLevel;	  
@@ -720,7 +821,7 @@ void receive(const MyMessage &message) {
 	}
 	if (message.type == V_LIGHT) {
 		int onOff = atoi( message.data );
-		myresend( var2Msg.set(onOff?"light ON":"light OFF") );
+		myresend( var2Msg.setSensor(message.sensor).set(onOff?"light ON":"light OFF") );
 		if(!switchTo(idx, onOff)){
 			return;
 		}
@@ -745,11 +846,9 @@ void receive(const MyMessage &message) {
 		  }
 		  saveState(EE_CONFIG, cfg);
 	  } else if( *s== 'p') {
-		  saveState(EEPROM_PARENT_NODE_ID_ADDRESS, d1);
-		  //softReset();
+		  hwWriteConfig(EEPROM_PARENT_NODE_ID_ADDRESS, d1);
 	  } else if( *s== 'i') {
-		  saveState(EEPROM_NODE_ID_ADDRESS, d1);
-		  //softReset();
+		  hwWriteConfig(EEPROM_NODE_ID_ADDRESS, d1);;
 	  } else if( *s== 'd') {
 		  pirDelay = d1;
 		  EEPROMWriteInt(EE_PIR_DELAY, pirDelay);
@@ -765,10 +864,17 @@ void receive(const MyMessage &message) {
 	  } else if( *s== 'w') {
 		  minWaves = d1;
 		  saveState(EE_MINWAVES, minWaves);
-	  } else {
+	  } else if( mystrncmp(cPing, s,5)) {
+			pingIntervalUnit = data[5];
+			pingIntervalValue = atoi(&data[6]);
+			saveState(EE_PING_UNIT, pingIntervalUnit);
+			saveState(EE_PING_TIME, pingIntervalValue);
+	  }	
+	  else if ((*s>='0') && (*s<='9')) {
 		  cfg = atoi( message.data );
 		  saveState(EE_CONFIG, cfg);
 	  }
+	  //hwReboot();
 
 	  softReset();
 	} 
