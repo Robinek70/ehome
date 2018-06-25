@@ -18,11 +18,11 @@
 #include <MySensors.h> 
 
 
-#define QUOTE(name) #name
-#define STR(macro) QUOTE(macro)
+//#define QUOTE(name) #name
+//#define STR(macro) QUOTE(macro)
 
 #define NODE_NAME		"Dimm. Light Switch"
-#define NODE_VER		"3.08" STR(MY_RF24_PA_LEVEL)
+#define NODE_VER		"3.11" STR(MY_RF24_PA_LEVEL)
 //MY_RF24_PA_LEVEL
 
 #define CHILD_ID_LIGHT_SENSOR	0
@@ -168,8 +168,9 @@ byte cfg;			// EE
 #define isPIR1			(cfg & CFG_PIR1)
 #define isPIR2			(cfg & CFG_PIR2)
 
-MyMessage luxMsg(CHILD_ID_LIGHT_SENSOR, V_LIGHT_LEVEL);
-MyMessage switchMsg(CHILD_ID_TEMP, V_LIGHT);
+MyMessage luxMsg(CHILD_ID_LIGHT_SENSOR, V_LEVEL);
+MyMessage switchMsg(CHILD_ID_DIMMER, V_STATUS);
+MyMessage dimmMsg(CHILD_ID_DIMMER, V_PERCENTAGE);
 MyMessage tempMsg(CHILD_ID_TEMP, V_TEMP);
 MyMessage pirMsg(CHILD_ID_TRIP, V_TRIPPED);
 MyMessage var2Msg(CHILD_ID_DIMMER, V_VAR2);
@@ -315,7 +316,7 @@ void presentation()
 
 void sendRequests() {
 	for(byte i=0;i<MaxLights;i++) {
-		  request(CHILD_ID_DIMMER + i, V_LIGHT);
+		  request(CHILD_ID_DIMMER + i, V_STATUS);
 	  }
 }
 
@@ -401,7 +402,7 @@ ISR(TIMER2_OVF_vect)          // timer compare interrupt service routine
 		
 		// line detection
 		if(count == 50) {
-			if(PIND & (1<<PD2)) {  // first half wave
+			if(!(PIND & (1<<PD2))) {  // first half wave
 				lights_hw[i].currentImpState = *lights_hw[i].line_port & lights_hw[i].line_pin; 
 
 				if(lights_hw[i].prevImpState == lights_hw[i].currentImpState) {
@@ -462,6 +463,7 @@ void loop() {
 					light->targetLevel = light->savedLevel;
 				}
 				myresend(switchMsg.setSensor(CHILD_ID_DIMMER + i).set(1));
+				myresend(dimmMsg.setSensor(CHILD_ID_DIMMER + i).set(100));
 			} 
 		} else {
 			// switch NOT pressed/active
@@ -479,6 +481,7 @@ void loop() {
 
 				light->targetLevel = MAX_VALUE;
 				myresend(switchMsg.setSensor(CHILD_ID_DIMMER + i).set(0));
+				myresend(dimmMsg.setSensor(CHILD_ID_DIMMER + i).set(0));
 			}
 		}
 
@@ -501,7 +504,8 @@ void loop() {
 			}
 
 			if(isLUX) {
-				if(prevLuxValue != luxValue/100) {
+				int delta = MIN(prevLuxValue, luxValue/100)*10/100;
+				if(/*prevLuxValue != luxValue/100*/ ((luxValue/100 < prevLuxValue - delta) || (prevLuxValue + delta < luxValue/100))) {
 					int vLux = sensorToLx(luxValue/100);
 					if(vLux != sensorToLx(prevLuxValue)) {
 						myresend(luxMsg.set(vLux));
@@ -819,7 +823,7 @@ void receive(const MyMessage &message) {
 		lights_hw[idx].targetLevel = requestedLevel;	  
 		lights_hw[idx].savedLevel = requestedLevel;	  
 	}
-	if (message.type == V_LIGHT) {
+	if (message.type == V_STATUS) {
 		int onOff = atoi( message.data );
 		myresend( var2Msg.setSensor(message.sensor).set(onOff?"light ON":"light OFF") );
 		if(!switchTo(idx, onOff)){
