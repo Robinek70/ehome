@@ -5,6 +5,10 @@
 #define MY_REPEATER_FEATURE 
 #define MY_SPECIAL_DEBUG
 
+//#define MY_SIGNING_SOFT
+//#define MY_SIGNING_SOFT_RANDOMSEED_PIN 7
+//#define MY_SIGNING_REQUEST_SIGNATURES
+
 #include <avr/pgmspace.h>
 //#include <avr/wdt.h>
 #include <SPI.h>
@@ -21,7 +25,7 @@
 #define STR(macro) QUOTE(macro)
 
 #define NODE_NAME		"Garage Repeater"
-#define NODE_VER		"1.00" STR(MY_RF24_PA_LEVEL)
+#define NODE_VER		"1.06" STR(MY_RF24_PA_LEVEL)
 
 //region Hardware
 
