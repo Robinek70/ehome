@@ -43,9 +43,9 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\..\..\..\Arduino\libraries\MySensors;D:\arduino-1.6.7\hardware\arduino\avr\libraries\SPI;$(ProjectDir)..\..\..\..\Arduino\libraries\DallasTemperature;$(ProjectDir)..\..\..\..\Arduino\libraries\OneWire;D:\arduino-1.6.7\libraries;D:\arduino-1.6.7\hardware\arduino\avr\libraries;$(ProjectDir)..\..\..\..\Arduino\libraries;D:\arduino-1.6.7\hardware\arduino\avr\cores\arduino;D:\arduino-1.6.7\hardware\arduino\avr\variants\standard;$(ProjectDir)..\code;D:\arduino-1.6.7\hardware\tools\avr\avr\include\;D:\arduino-1.6.7\hardware\tools\avr\avr\include\avr\;D:\arduino-1.6.7\hardware\tools\avr\lib\gcc\avr\4.8.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\..\..\Arduino\libraries\DallasTemperature;$(ProjectDir)..\..\..\..\Arduino\libraries\MySensors;$(ProjectDir)..\..\..\..\Arduino\libraries\OneWire;D:\arduino-1.8.4\hardware\arduino\avr\libraries\SPI\src;D:\arduino-1.8.4\libraries;D:\arduino-1.8.4\hardware\arduino\avr\libraries;$(ProjectDir)..\..\..\..\Arduino\libraries;D:\arduino-1.8.4\hardware\arduino\avr\cores\arduino;D:\arduino-1.8.4\hardware\arduino\avr\variants\standard;$(ProjectDir)..\code;D:\arduino-1.8.4\hardware\tools\avr\avr\include\;D:\arduino-1.8.4\hardware\tools\avr\avr\include\avr\;D:\arduino-1.8.4\hardware\tools\avr\lib\gcc\avr\4.8.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>$(ProjectDir)__vm\.code.vsarduino.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
-      <PreprocessorDefinitions>__AVR_ATmega328p__;__AVR_ATmega328P__;F_CPU=16000000L;ARDUINO=10607;ARDUINO_AVR_UNO;ARDUINO_ARCH_AVR;__cplusplus=201103L;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>__AVR_ATmega328p__;__AVR_ATmega328P__;F_CPU=16000000L;ARDUINO=10804;ARDUINO_AVR_UNO;ARDUINO_ARCH_AVR;__cplusplus=201103L;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>

@@ -1,9 +1,7 @@
 #define MY_DEBUG
 #define MY_RADIO_NRF24
-//#define MY_NODE_ID			10
-#define MY_NODE_ID			222
-//#define RF24_PA_LEVEL 		RF24_PA_MAX
-#define RF24_PA_LEVEL 		RF24_PA_MIN
+#define MY_NODE_ID			10
+#define RF24_PA_LEVEL 		RF24_PA_MAX
 #define MY_REPEATER_FEATURE
 
 #include <MySensors.h> 
@@ -47,7 +45,7 @@ MyMessage doorOpenMsg(DOOR_OPEN_ID, V_TRIPPED);
 //MyMessage gateStatusMsg(GATE_STATUS_ID, V_TRIPPED);
 MyMessage doorRingMsg(DOOR_RING_ID, V_TRIPPED);
 MyMessage tempMsg(TEMP_ID,V_TEMP);
-MyMessage fotoMsg(FOTO_ID, V_LIGHT_LEVEL);
+MyMessage fotoMsg(FOTO_ID, V_LEVEL);
 
 bool is_gate_opened;
 bool is_door_openning;
