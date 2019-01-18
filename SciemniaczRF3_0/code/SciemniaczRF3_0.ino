@@ -23,14 +23,17 @@
 //#define STR(macro) QUOTE(macro)
 
 #define NODE_NAME		"Dimm. Light Switch"
-#define NODE_VER		"3.195R" STR(MY_RF24_PA_LEVEL)
+#define NODE_VER		"3.22R" STR(MY_RF24_PA_LEVEL)
 //MY_RF24_PA_LEVEL
 // .192 - reset on errors
 // .193 - very long impuls (whole period)
 // .195 - reset on error fixes, on sending, power level
+// .2 multifunctional clicks/switch
+// .22 multifunctional clicks/switch - long/click/double/triple
 
 #define CHILD_ID_LIGHT_SENSOR	0
 #define CHILD_ID_DIMMER			10
+#define CHILD_ID_SELECTOR		15
 #define CHILD_ID_TRIP			20
 #define CHILD_ID_TEMP			30
 #define CHILD_ID_HUM			40
@@ -248,6 +251,18 @@ inline uint32_t calcTimestamp(char u, byte v) {
 byte tmp1, tmp2, tmp4;
 int tmp3;
 
+
+#define PRESS_NONE		0
+#define PRESS_CLICK		1
+#define PRESS_DOUBLE	2
+#define PRESS_TRIPLE	3
+#define PRESS_LONG		9
+
+uint32_t startPress[2];
+byte startingPress[2];
+byte countPress[2];
+byte press_action[2];
+
 void before() {
 	wdt_disable();
 	wdt_enable(WDTO_4S);
@@ -271,6 +286,10 @@ void before() {
 		//light_hw->savedLevel = loadState(EE_SW_DATA + EE_SW_SAVED + i*EE_SW_DATA_SIZE);
 		//light_hw->invertSwitch = loadState(EE_SW_DATA + EE_SW_INVERT + i*EE_SW_DATA_SIZE);
 		light_hw->prevLineState = light_hw->lineState;
+
+		startingPress[i] = 0;
+		press_action[i] = 0;
+		countPress[i] = 0;
 	}
 
 
@@ -321,6 +340,8 @@ void presentation()
 
 	for(byte i=0;i<MaxLights;i++) {
 		present(CHILD_ID_DIMMER + i, S_DIMMER);
+		wait(50);
+		present(CHILD_ID_SELECTOR + i, S_DIMMER);
 		wait(50);
 	}
 
@@ -443,6 +464,7 @@ ISR(TIMER2_OVF_vect)          // timer compare interrupt service routine
 	}
 }
 
+
 byte started = 0;
 uint32_t now;
 byte tempOvertime;
@@ -481,10 +503,74 @@ void loop() {
 		light->switchPosition = switchPosition(light);
 
 		if(light->prevLineState != light->lineState) {
-			light->prevLineState = light->lineState;
+			if(!startingPress[i]) {
+				//  if(countPress[i]==0) {
+					startingPress[i]=1;
+				//  }
+				 startPress[i]=now;
+			} else {	// changes state in progress
+				// if((now-startPress[i]) > 1000) {
+					// long press
 
-			//myresend( varDimmMsg.setSensor(CHILD_ID_DIMMER + i).set(light->lineState?"line ON":"line OFF") );
-			myresend( var2Msg.set(light->lineState?"line ON":"line OFF") );
+					// if(press_action[i] == PRESS_NONE) {
+						// press_action[i] = 	PRESS_LONG;
+					// }
+
+					// light->prevLineState = light->lineState;
+					//myresend( varDimmMsg.setSensor(CHILD_ID_DIMMER + i).set(light->lineState?"line ON":"line OFF") );
+					// myresend( var2Msg.set(light->lineState?"line ON":"line OFF") );
+				// }
+			}			
+			
+		} else {
+			if(startingPress[i]) {	// release before change - click
+				startingPress[i] = 0;
+				countPress[i]++;
+				if(countPress[i] == 1) {
+					// click
+					press_action[i] = PRESS_CLICK;
+					myresend( var2Msg.set("CLICK") );
+				} else if(countPress[i] == 2) {
+					// double click
+					press_action[i] = PRESS_DOUBLE;
+					myresend( var2Msg.set("DOUBLE") );
+				} else if(countPress[i] > 2) {
+					// double click
+					press_action[i] = PRESS_TRIPLE;
+					myresend( var2Msg.set("TRIPLE") );
+				}
+			}
+			//startingPress[i]=0;
+		}
+		if((now-startPress[i]) > 700) {
+			
+			if(startingPress[i]) {
+				// long press
+					if(press_action[i] == PRESS_NONE) {
+						press_action[i] = PRESS_LONG;
+						myresend( var2Msg.set("LONG") );
+					}
+			}
+
+			
+			if((press_action[i] != PRESS_NONE) /*&& startingPress[i]*/ ) {
+				if(press_action[i] == PRESS_LONG) {
+					light->prevLineState = light->lineState;
+						//myresend( varDimmMsg.setSensor(CHILD_ID_DIMMER + i).set(light->lineState?"line ON":"line OFF") );
+						myresend( var2Msg.set(light->lineState?"line ON":"line OFF") );
+				} else {
+					
+				}
+				//myresend(switchMsg.setSensor(CHILD_ID_SELECTOR + i).set(1));
+				//wait(50);
+				myresend(dimmMsg.setSensor(CHILD_ID_SELECTOR + i).set(press_action[i]));
+				//wait(50);
+				//myresend(switchMsg.set(0));
+				//myresend(dimmMsg.set(0));
+			}
+			countPress[i] = 0;
+			startingPress[i] = 0;
+			press_action[i] = PRESS_NONE;
 		}
 
 		if(light->switchPosition) {
@@ -508,7 +594,7 @@ void loop() {
 				switch_status = SWITCH_OFF;
 				
 				light->savedLevel = light->targetLevel; 
-				// zapisaæ w eeprom jesli wartosc sie zmienila
+				// zapisaï¿½ w eeprom jesli wartosc sie zmienila
 				if(loadState(EE_SW_DATA + EE_SW_SAVED + i*EE_SW_DATA_SIZE) != light->targetLevel /*&& !setByRemote*/){
 				  
 				  saveState(EE_SW_DATA + EE_SW_SAVED + i*EE_SW_DATA_SIZE,light->savedLevel);
@@ -637,10 +723,10 @@ byte switchPosition(struct LIGHTHW* light) {
 	}*/
 
 	if(light->invertSwitch) {
-		return light->lineState?0:1;
+		return light->prevLineState?0:1;
 	}
 
-	return light->lineState?1:0;	  
+	return light->prevLineState?1:0;	  
 }
 
 boolean switchTo(byte idx, byte onOff) {
