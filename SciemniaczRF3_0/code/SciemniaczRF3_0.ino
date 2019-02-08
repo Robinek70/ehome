@@ -1,10 +1,10 @@
 #define MY_RADIO_NRF24
 //#define MY_NODE_ID		 9
-#define MY_RF24_PA_LEVEL	RF24_PA_HIGH
+#define MY_RF24_PA_LEVEL	RF24_PA_LOW
 //#define MY_REPEATER_FEATURE 
 #define MY_BAUD_RATE		57600
 #define MY_SPECIAL_DEBUG
-#define MY_TRANSPORT_WAIT_READY_MS	(1001)
+#define MY_TRANSPORT_WAIT_READY_MS	(1000)
 
 
 //#define MY_SIGNING_SOFT
@@ -23,13 +23,18 @@
 //#define STR(macro) QUOTE(macro)
 
 #define NODE_NAME		"Dimm. Light Switch"
-#define NODE_VER		"3.22R" STR(MY_RF24_PA_LEVEL)
+#define NODE_VER		"3.26-200" STR(MY_RF24_PA_LEVEL)
 //MY_RF24_PA_LEVEL
 // .192 - reset on errors
 // .193 - very long impuls (whole period)
 // .195 - reset on error fixes, on sending, power level
 // .2 multifunctional clicks/switch
 // .22 multifunctional clicks/switch - long/click/double/triple
+// .26	- config for multifunctional clicks/switch cfg params s/l	(18472/824)
+//		- config for multifunctional LONG, no reset level set to 280ms, fixes
+//		- multiclick fixes time click, reset on 5-click, heartbreak, fixed autoreset
+//		- bell mode
+//		- reduced to 50 steps
 
 #define CHILD_ID_LIGHT_SENSOR	0
 #define CHILD_ID_DIMMER			10
@@ -54,11 +59,14 @@
 #define TIMER2_STOP TCCR2B &= ~((1<<CS22) |(1<<CS21) | (1<<CS20)); 
 
 #define INT_NO	0
-#define MAX_PING_ERRORS		10
+#define MAX_PING_ERRORS		3
 
 //F_CPU == 16000000
 // 8MHz
-#define COUNTDOWN_TIMER  255-100+1
+// 100 krokow dla sciemniacza
+//#define COUNTDOWN_TIMER  255-100+1
+// 50 krokow dla sciemniacza
+#define COUNTDOWN_TIMER  255-200+1
 ////////////////////////////////////////////// - po resecie chyba zle // FUSE: L: 62, H: d9, EX: FF, LOCK: 3F
 // FUSE: L: E2, H: DA, EX: FF, LOCK: 3F
 
@@ -69,7 +77,7 @@
 //#define L2  (1<<PC4)
 
 #define CFG_DIMMER_ON				0x01
-//#define CFG_SWITCH_STORE_LEVEL			0x02
+#define CFG_BELL_MODE				0x02
 //#define CFG_SWITCH_ALWAYS_FULL			0x04
 //#define CFG_HUMIDITY				0x08
 #define CFG_PIR1					0x10
@@ -78,20 +86,29 @@
 #define CFG_LUX						0x80
 
 #define EE_CONFIG		0					// 1 byte
-#define EE_SWITCHES		EE_CONFIG + 1		// 1 byte
-#define EE_PIR_DELAY	EE_SWITCHES + 1		// 2 bytes / int
+#define EE_LIGHTS		EE_CONFIG + 1		// 1 byte
+#define EE_PIR_DELAY	EE_LIGHTS + 1		// 2 bytes / int
 #define EE_DTT			EE_PIR_DELAY + 2	// 1 byte
 #define EE_FADE			EE_DTT + 1			// 1 byte
 #define EE_MINWAVES		EE_FADE + 1			// 1 byte
 #define EE_PING_UNIT	EE_MINWAVES + 1		// 1 byte
 #define EE_PING_TIME	EE_PING_UNIT + 1	// 1 byte
 #define EE_RF24LEVEL	EE_PING_TIME + 1	// 1 byte
+#define EE_SWITCHES		EE_RF24LEVEL + 1	// 1 byte
+#define EE_EVENT		EE_SWITCHES + 1		// 1 byte - state of last event
 
 #define EE_SW_DATA		100
 
 #define EE_SW_SAVED		0
 #define EE_SW_INVERT	1
 #define EE_SW_DATA_SIZE	5
+
+#define EV_NONE			0
+#define EV_REBOOT		1
+#define EV_NOT_SEND		2
+#define EV_NOT_RETR		3
+#define EV_MANUAL_RST	4
+#define EV_NOT_SEND_RST	5
 
 struct SAVEDDATA {
 	byte savedLevel;
@@ -148,17 +165,18 @@ byte prevSkippedTemp[MAX_ATTACHED_DS18B20];
 byte numSensors=0;
 boolean metric = true;
 byte dtt = 4;		//EE
-byte minWaves = 20;		//EE
+byte minWaves = 4;		//EE
 volatile byte ms10_flag  = 0;
 volatile byte ms10_cnt  = 0;
 volatile byte s1_cnt = 0;
 volatile byte s5_cnt = 0;
-volatile byte pingErrors;
+volatile byte pingErrors = 0;
 int32_t luxValue = 0;
 int prevLuxValue = 0;
 byte dtLux = 50;
 
 byte MaxLights = 1;	// EE
+byte MaxSwitches = 0;	// EE
 byte setByRemote = 0;
 int8_t temp_mode = 0;
 float lastTempSend = 0;
@@ -176,9 +194,10 @@ byte prev_trip2;
 byte fadeSpeed = 2;	// EE
 int pirDelay = 0;	// EE
 byte cfg;			// EE
-byte _event = 0;
+byte _event = 1;
 
 #define isLIGHTFULL		(!(cfg & CFG_DIMMER_ON))
+#define isBELLMODE		(cfg & CFG_BELL_MODE)
 #define isLUX			(cfg & CFG_LUX)
 #define isPIR1			(cfg & CFG_PIR1)
 #define isPIR2			(cfg & CFG_PIR2)
@@ -192,7 +211,7 @@ MyMessage var2Msg(CHILD_ID_DIMMER, V_VAR2);
 MyMessage _msgCust(199, V_TEXT);
 
 
-void myresend(MyMessage &msg, byte repeats = 5)
+bool myresend(MyMessage &msg, byte repeats = 5)
 {
 	byte repeat = 1;
 	boolean sendOK = false;
@@ -214,6 +233,7 @@ void myresend(MyMessage &msg, byte repeats = 5)
 	if(!sendOK){
 		pingErrors++;
 	}	
+	return sendOK;
 }
 
 void EEPROMWriteInt(int p_address, int p_value)
@@ -253,15 +273,18 @@ int tmp3;
 
 
 #define PRESS_NONE		0
-#define PRESS_CLICK		1
-#define PRESS_DOUBLE	2
-#define PRESS_TRIPLE	3
-#define PRESS_LONG		9
+#define PRESS_CLICK		10
+#define PRESS_DOUBLE	20
+#define PRESS_TRIPLE	30
+#define PRESS_FOUR		40
+#define PRESS_FIVE		50
 
-uint32_t startPress[2];
-byte startingPress[2];
-byte countPress[2];
-byte press_action[2];
+#define PRESS_LONG		60
+
+uint32_t startPress[MAXLIGHTS];
+byte startingPress[MAXLIGHTS];
+byte countPress[MAXLIGHTS];
+byte press_action[MAXLIGHTS];
 
 void before() {
 	wdt_disable();
@@ -285,19 +308,22 @@ void before() {
 		EEReadByte(EE_SW_DATA + EE_SW_INVERT + i*EE_SW_DATA_SIZE, &(light_hw->invertSwitch));
 		//light_hw->savedLevel = loadState(EE_SW_DATA + EE_SW_SAVED + i*EE_SW_DATA_SIZE);
 		//light_hw->invertSwitch = loadState(EE_SW_DATA + EE_SW_INVERT + i*EE_SW_DATA_SIZE);
-		light_hw->prevLineState = light_hw->lineState;
+		//light_hw->prevLineState = light_hw->lineState;
 
 		startingPress[i] = 0;
 		press_action[i] = 0;
 		countPress[i] = 0;
 	}
 
-
+	EEReadByte(EE_EVENT, &_event);
+	if(!_event)	_event = 1;
+	else if(_event !=255) _event |= 0x80;
 
 	pinMode(5, OUTPUT); // test pin, SHA
 
 	EEReadByte(EE_CONFIG, &cfg);
-	EEReadByte(EE_SWITCHES, &MaxLights);
+	EEReadByte(EE_LIGHTS, &MaxLights);
+	EEReadByte(EE_SWITCHES, &MaxSwitches);
 	EEReadInt(EE_PIR_DELAY, &pirDelay);
 	EEReadByte(EE_DTT, &dtt);
 	EEReadByte(EE_FADE, &fadeSpeed);
@@ -341,6 +367,8 @@ void presentation()
 	for(byte i=0;i<MaxLights;i++) {
 		present(CHILD_ID_DIMMER + i, S_DIMMER);
 		wait(50);
+	}
+	for(byte i=0;i<MaxSwitches;i++) {
 		present(CHILD_ID_SELECTOR + i, S_DIMMER);
 		wait(50);
 	}
@@ -350,7 +378,7 @@ void presentation()
 		wait(50);
 	}
 	present(199, S_INFO);
-	//metric = getConfig().isMetric;
+
 	metric = getControllerConfig().isMetric;
 }
 
@@ -358,6 +386,7 @@ bool sendRequests() {
 	bool ok = true;
 	for(byte i=0;i<MaxLights;i++) {
 		  ok = request(CHILD_ID_DIMMER + i, V_STATUS) && ok;
+		  wait(20);
 	}
 	return ok;
 }
@@ -379,15 +408,9 @@ void setup() {
   
 
   setRFLevel(n24level);
-
-  _event=1;
-
-  sendRequests();
 }
 
 volatile byte count;
-//volatile byte current = 100;
-
 
 void myint0()
 {
@@ -430,17 +453,18 @@ void myint0()
 ISR(TIMER2_OVF_vect)          // timer compare interrupt service routine
 {
 	TCNT2 = COUNTDOWN_TIMER;//255-200+1;
-	count++;
+	//count++;
+	count+=2;
 
-	for(byte i=0; i<MaxLights;i++){ 
+	for(byte i=0; i<MAXLIGHTS;i++){ 
 		byte pin = lights_hw[i].pin;
-		if(count > 100) { // don't off, required for Low Power LEDs, impuls should be longer than one tick, 100 disabling pulse, always active
+		if(count > 40) { // don't off, required for Low Power LEDs, impuls should be longer than one tick, 100 disabling pulse, always active
 			LIGHT_PORT |= pin;		// High - Off
 		}
 		if(count > 92) // proper values are 0 - 96
 			return;
 
-		if(count == lights_hw[i].current) {  // wlacz	
+		if(count >= lights_hw[i].current && count <= lights_hw[i].current + 6) {  // wlacz	, 6x step width pulse
 			LIGHT_PORT &= ~pin;	// Low - On
 		}
 		
@@ -468,6 +492,7 @@ ISR(TIMER2_OVF_vect)          // timer compare interrupt service routine
 byte started = 0;
 uint32_t now;
 byte tempOvertime;
+const char cReset[] PROGMEM  =  {"Reset:"};
 
 void loop() {
 	if(!started) {
@@ -475,103 +500,127 @@ void loop() {
 		/*send(var2Msg.setSensor(CHILD_ID_DIMMER + 0).set(hwCPUFrequency()));
 		send(var2Msg.setSensor(CHILD_ID_DIMMER + 0).set(hwCPUVoltage()));
 		send(var2Msg.setSensor(CHILD_ID_DIMMER + 0).set("---"));*/
-		reportCfg() ;
+		reportCfg();
+		sendRequests();
 		started=1;
 		pingErrors = 0;
+		for(byte i=0;i<MaxLights;i++) {
+			LIGHTHW* light_hw = &lights_hw[i];
+			light_hw->prevLineState = light_hw->lineState;
+		}
 	}
 	if(_event) {
-		if(_event==255)
+		if(_event == 255)
 		{
-			_event = 0;	// send delete event
+			_event = EV_NONE;	// send delete event
 		}
-		myresend(_msgCust.set(_event));
+		bool ok = myresend(_msgCust.set(myF(cReset, _event)));
+
+		if(ok) {
+			saveState(EE_EVENT, EV_NONE);
+		} else {
+			if(_event == EV_NOT_SEND) {
+				_event = EV_NOT_SEND_RST;	// probably not send, reinitialized radio didn't help, try reset device
+			}
+			saveState(EE_EVENT, _event);
+		}		
+		
 		if(_event) {
-			if(_event==3) {
-				while(1);	// reset by watchdot
+			if(_event == EV_NOT_RETR || _event == EV_MANUAL_RST || _event == EV_NOT_SEND_RST) {
+				while(1);	// reset by watchdog
 			}
 			_event=255;	// delete event
 		}
 	}
 	now = millis();
+
+	// determine switches action
+	for(byte i=0;i<MAXLIGHTS;i++) {
+		LIGHTHW* light = &lights_hw[i];
+		var2Msg.setSensor(CHILD_ID_SELECTOR + i);
+
+		if(light->prevLineState != light->lineState) {
+			if(!startingPress[i]) {
+					startingPress[i]=1;
+				 startPress[i]=now;
+			} else {	// changes state in progress
+			}			
+			
+		} else {
+			if(startingPress[i]) {	// release before change - click
+				startPress[i] = now;
+				startingPress[i] = 0;
+				countPress[i]++;
+				if(countPress[i] == 1) {
+					// click
+					press_action[i] = PRESS_CLICK;
+					//myresend(dimmMsg.setSensor(199).set(now-startPress[i]));
+					//myresend( var2Msg.set("CLICK") );
+				} else if(countPress[i] == 2) {
+					// double click
+					press_action[i] = PRESS_DOUBLE;
+					//myresend( var2Msg.set("DOUBLE") );
+				} else if(countPress[i] == 3) {
+					// double click
+					press_action[i] = PRESS_TRIPLE;
+					//myresend( var2Msg.set("TRIPLE") );
+				} else if(countPress[i] == 4) {
+					// double click
+					press_action[i] = PRESS_FOUR;
+					//myresend( var2Msg.set("FOUR" ));
+				} else if(countPress[i] > 4) {
+					// double click
+					press_action[i] = PRESS_FIVE;
+					_event=4;
+					//myresend( var2Msg.set("FIVE") );
+				}
+			}
+			//startingPress[i]=0;
+		}
+		if((now-startPress[i]) > 280) {
+			
+			if(startingPress[i]) {
+				// long press
+					if(press_action[i] == PRESS_NONE) {
+						press_action[i] = PRESS_LONG;
+						//myresend( var2Msg.set("LONG") );
+					}
+			}
+			
+			if((press_action[i] != PRESS_NONE)) {
+
+				if(press_action[i] == PRESS_CLICK && isBELLMODE) {
+						//light->prevLineState = light->lineState;
+						light->invertSwitch = !light->invertSwitch;
+						
+				} else if(press_action[i] == PRESS_LONG) {  // switch pressed
+						light->prevLineState = light->lineState;
+						if(isBELLMODE) {   // revert switching if bell mode
+							light->invertSwitch = !light->invertSwitch;
+						}
+				}
+
+				if(i < MaxSwitches) {
+					//myresend(dimmMsg.setSensor(CHILD_ID_SELECTOR + i).set(0));
+					//wait(50);
+					myresend(dimmMsg.setSensor(CHILD_ID_SELECTOR + i).set(press_action[i]));
+				}
+			}
+			countPress[i] = 0;
+			startingPress[i] = 0;
+			press_action[i] = PRESS_NONE;
+		}
+	}
+	
 	tempOvertime = ((now - lastTempSend) > 30UL*60*1000UL);
 	byte anyDimm = 0;
 	for(byte i=0;i<MaxLights;i++) {
 		LIGHTHW* light = &lights_hw[i];
 		byte switch_status = light->switchStatus;
 
+		//light->prevLineState = light->lineState;
 		// final light switch position; 1 - on; 0 - off
 		light->switchPosition = switchPosition(light);
-
-		if(light->prevLineState != light->lineState) {
-			if(!startingPress[i]) {
-				//  if(countPress[i]==0) {
-					startingPress[i]=1;
-				//  }
-				 startPress[i]=now;
-			} else {	// changes state in progress
-				// if((now-startPress[i]) > 1000) {
-					// long press
-
-					// if(press_action[i] == PRESS_NONE) {
-						// press_action[i] = 	PRESS_LONG;
-					// }
-
-					// light->prevLineState = light->lineState;
-					//myresend( varDimmMsg.setSensor(CHILD_ID_DIMMER + i).set(light->lineState?"line ON":"line OFF") );
-					// myresend( var2Msg.set(light->lineState?"line ON":"line OFF") );
-				// }
-			}			
-			
-		} else {
-			if(startingPress[i]) {	// release before change - click
-				startingPress[i] = 0;
-				countPress[i]++;
-				if(countPress[i] == 1) {
-					// click
-					press_action[i] = PRESS_CLICK;
-					myresend( var2Msg.set("CLICK") );
-				} else if(countPress[i] == 2) {
-					// double click
-					press_action[i] = PRESS_DOUBLE;
-					myresend( var2Msg.set("DOUBLE") );
-				} else if(countPress[i] > 2) {
-					// double click
-					press_action[i] = PRESS_TRIPLE;
-					myresend( var2Msg.set("TRIPLE") );
-				}
-			}
-			//startingPress[i]=0;
-		}
-		if((now-startPress[i]) > 700) {
-			
-			if(startingPress[i]) {
-				// long press
-					if(press_action[i] == PRESS_NONE) {
-						press_action[i] = PRESS_LONG;
-						myresend( var2Msg.set("LONG") );
-					}
-			}
-
-			
-			if((press_action[i] != PRESS_NONE) /*&& startingPress[i]*/ ) {
-				if(press_action[i] == PRESS_LONG) {
-					light->prevLineState = light->lineState;
-						//myresend( varDimmMsg.setSensor(CHILD_ID_DIMMER + i).set(light->lineState?"line ON":"line OFF") );
-						myresend( var2Msg.set(light->lineState?"line ON":"line OFF") );
-				} else {
-					
-				}
-				//myresend(switchMsg.setSensor(CHILD_ID_SELECTOR + i).set(1));
-				//wait(50);
-				myresend(dimmMsg.setSensor(CHILD_ID_SELECTOR + i).set(press_action[i]));
-				//wait(50);
-				//myresend(switchMsg.set(0));
-				//myresend(dimmMsg.set(0));
-			}
-			countPress[i] = 0;
-			startingPress[i] = 0;
-			press_action[i] = PRESS_NONE;
-		}
 
 		if(light->switchPosition) {
 			// switch PRESSED/ACTIVE
@@ -586,7 +635,7 @@ void loop() {
 					light->targetLevel = light->savedLevel;
 				}
 				myresend(switchMsg.setSensor(CHILD_ID_DIMMER + i).set(1));
-				myresend(dimmMsg.setSensor(CHILD_ID_DIMMER + i).set(100));
+				myresend(dimmMsg.setSensor(CHILD_ID_DIMMER + i).set(100 - light->targetLevel));
 			} 
 		} else {
 			// switch NOT pressed/active
@@ -660,7 +709,7 @@ void loop() {
 		if(trip != prev_trip1) {
 			if((trip == 1) || ((millis() - lastSendPir1) > (uint32_t)pirDelay*1000)) {
 				lastSendPir1 = millis();
-				myresend( var2Msg.set(trip?"move ON":"move OFF") );
+				myresend( var2Msg.setSensor(CHILD_ID_TRIP).set(trip?"move ON":"move OFF") );
 				myresend(pirMsg.setSensor(CHILD_ID_TRIP).set(trip));
 				prev_trip1 = trip;
 			}
@@ -688,18 +737,26 @@ void checkConnection() {
 			// Resetting RADIO
 		  transportInit(); 
 		  setRFLevel(n24level);
+		  RF24_enableFeatures();
 		  transportWaitUntilReady(5000);
 		  //myresend( var2Msg.set("Restarted RADIO") );
-		  _event = 2;
+		  sleep(10);
+		  _event = EV_NOT_SEND;
 	  }
 
-	  _reqExpected++;// = 3;
-
-	  if(!sendRequests()) {
+	  if(!sendHeartbeat(true)) {
 		  pingErrors++;
-		  lastPing -= calcTimestamp((char)pingIntervalUnit, pingIntervalValue);	
-		  lastPing += 10*1000U;
-	  }	  
+		  _reqExpected++;
+	  }
+
+	  if(MaxLights > 0) {
+		  //_reqExpected++;// = 3;
+		  if(!sendRequests() /*|| !sendHeartbeat(true)*/) {
+			  pingErrors++;
+			  lastPing -= calcTimestamp((char)pingIntervalUnit, pingIntervalValue);	
+			  lastPing += 10*1000U;
+		  }	  
+	  }
     }
 }
 
@@ -710,17 +767,6 @@ void setRFLevel(uint8_t rfLevel) {
 }
 
 byte switchPosition(struct LIGHTHW* light) {
-
-	/*if(light->prevImpState == light->currentImpState) {
-		if(light->prevImpStateCounter < minWaves) {
-			light->prevImpStateCounter++;
-		} else {
-			light->lineState = light->currentImpState; 
-		}
-	} else {
-		light->prevImpStateCounter = 0;
-		light->prevImpState = light->currentImpState;
-	}*/
 
 	if(light->invertSwitch) {
 		return light->prevLineState?0:1;
@@ -844,9 +890,11 @@ void startMeasureDS() {
 const char cCfg[] PROGMEM  =  {"Cfg:"};
 const char cPirDelay[] PROGMEM  =  {"PIR Delay (d):"};
 const char cdtt[] PROGMEM  =  {"dtT (t):"};
-const char cLights[] PROGMEM  =  {"Switches (s):"};
+const char cLights[] PROGMEM  =  {"Lights (l):"};
+const char cSwitches[] PROGMEM  =  {"Switches (s):"};
 const char cTempSens[] PROGMEM  =  {"Temps:"};
 const char cDimmer[] PROGMEM  =  {"Dimmer (0):"};
+const char cBellMode[] PROGMEM  =  {"Bell mode (1):"};
 const char cPir1[] PROGMEM  =  {"PIR1 (4):"};
 const char cPir2[] PROGMEM  =  {"PIR2 (5):"};
 const char cLux[] PROGMEM  =  {"Lux (7):"};
@@ -857,7 +905,7 @@ const char cInverted[] PROGMEM  =  {"Inverted:"};
 const char cPing[] PROGMEM  =  {"PING:"};
 //const char rebootPwr[] PROGMEM  = {"Boot Power"};
 //const char rebootWrt[] PROGMEM  = {"Boot WRT"};
-const char cRf24level[] PROGMEM  = {"RF24Leve(l):"};
+const char cRf24level[] PROGMEM  = {"RF24Leve(L):"};
 
 char buffer[20];
 
@@ -865,6 +913,7 @@ char buffer[20];
 
 void reportCfg() {
 	//cfg=128+16+1;
+	var2Msg.setSensor(199);
 	myF(cCfg, cfg);
 	byte len = strlen(buffer);
 	buffer[len++]='b';
@@ -872,6 +921,7 @@ void reportCfg() {
 	myresend(var2Msg.set(buffer));
 
 	myresend( var2Msg.set(myF(cDimmer,onoff(cfg & CFG_DIMMER_ON)) ));
+	myresend( var2Msg.set(myF(cBellMode,onoff(cfg & CFG_BELL_MODE)) ));
 	myresend( var2Msg.set(myF(cPir1,onoff(cfg & CFG_PIR1)) ));
 	myresend( var2Msg.set(myF(cPir2,onoff(cfg & CFG_PIR2)) ));
 	myresend( var2Msg.set(myF(cLux,onoff(cfg & CFG_LUX)) ));
@@ -880,6 +930,7 @@ void reportCfg() {
 	myresend(var2Msg.set(myF(cPirDelay, pirDelay)));
 	myresend(var2Msg.set(myF(cdtt, dtt)));
 	myresend(var2Msg.set(myF(cLights, MaxLights)));
+	myresend(var2Msg.set(myF(cSwitches, MaxSwitches)));
 	myresend(var2Msg.set(myF(cFade, fadeSpeed)));
 	myresend(var2Msg.set(myF(cMinWaves, minWaves)));
 	myresend(var2Msg.set(myF(cTempSens, numSensors)));
@@ -947,26 +998,41 @@ byte mystrncmp(const char* flash, const char * s, byte count) {
 void receive(const MyMessage &message) {
 	_reqExpected = 0;
 	pingErrors = 0;
-	byte idx  = message.sensor - CHILD_ID_DIMMER;
-	if (message.type == V_DIMMER) {
-		int requestedLevel = atoi( message.data );
-
-		byte onOff = requestedLevel > 0 ? 1 : 0;	// todo:  wysylac tylko gdy zmiana	  
-
-		requestedLevel = map(requestedLevel, 100, 0, MIN_VALUE, MAX_VALUE);
-
-		myresend( var2Msg.setSensor(message.sensor).set(onOff?"dimmer ON":"dimmer OFF") );
-		switchTo(idx, onOff);
-
-		lights_hw[idx].targetLevel = requestedLevel;	  
-		lights_hw[idx].savedLevel = requestedLevel;	  
+	myresend(var2Msg.setSensor(199).set("RETRIEVE") );
+	if(message.isAck()) {
+		myresend(var2Msg.setSensor(199).set("ACK") );
+		return;
 	}
-	if (message.type == V_STATUS) {
-		int onOff = atoi( message.data );
-		myresend( var2Msg.setSensor(message.sensor).set(onOff?"light ON":"light OFF") );
-		if(!switchTo(idx, onOff)){
-			return;
+	byte idx  = message.sensor - CHILD_ID_DIMMER;
+	if(idx < MaxLights) {
+		if(strlen(message.data)>0 ) {
+			if (message.type == V_DIMMER) {
+				int requestedLevel = atoi( message.data );
+
+				byte onOff = requestedLevel > 0 ? 1 : 0;	// todo:  wysylac tylko gdy zmiana	  
+
+				requestedLevel = map(requestedLevel, 100, 0, MIN_VALUE, MAX_VALUE);
+
+				//myresend( var2Msg.setSensor(message.sensor).set(onOff?"dimmer ON":"dimmer OFF") );
+				switchTo(idx, onOff);
+
+				lights_hw[idx].targetLevel = requestedLevel;	  
+				lights_hw[idx].savedLevel = requestedLevel;	  
+			}
+			if (message.type == V_STATUS) {
+				int onOff = atoi( message.data );
+				//myresend( var2Msg.setSensor(message.sensor).set(onOff?"light ON":"light OFF") );
+				if(!switchTo(idx, onOff)){
+					return;
+				}
+			}
+		}  else {
+			if(message.getCommand() == C_REQ) {
+				myresend(switchMsg.setSensor(CHILD_ID_DIMMER + idx).set(lights_hw[idx].switchPosition));
+				myresend(dimmMsg.setSensor(CHILD_ID_DIMMER + idx).set(100 - lights_hw[idx].targetLevel));
+			}
 		}
+
 	}
 	if (message.type == V_VAR1 || message.type == V_CUSTOM) {
 	  if(strlen(message.data) == 0) {
@@ -998,15 +1064,18 @@ void receive(const MyMessage &message) {
 		  dtt = d1;
 		  saveState(EE_DTT, dtt);
 	  } else if( *s== 's') {
+		  MaxSwitches = d1;
+		  saveState(EE_SWITCHES, MaxSwitches);
+	  } else if( *s== 'l') {
 		  MaxLights = d1;
-		  saveState(EE_SWITCHES, MaxLights);
+		  saveState(EE_LIGHTS, MaxLights);
 	  } else if( *s== 'f') {
 		  fadeSpeed = d1;
 		  saveState(EE_FADE, fadeSpeed);
 	  } else if( *s== 'w') {
 		  minWaves = d1;
 		  saveState(EE_MINWAVES, minWaves);
-	  } else if( *s== 'l') {
+	  } else if( *s== 'L') {
 		  n24level = d1;
 		  saveState(EE_RF24LEVEL, n24level);
 	  }
@@ -1020,14 +1089,14 @@ void receive(const MyMessage &message) {
 		  cfg = atoi( message.data );
 		  saveState(EE_CONFIG, cfg);
 	  }
-	  //hwReboot();
+	  hwReboot();
 
-	  softReset();
+	  //softReset();
 	} 
-	if (message.type == V_VAR2) {
-		int v = atoi( message.data );
-		lights_hw[0].targetLevel = v;
-		//lights_hw[0].current = v;
-	} 
+	//if (message.type == V_VAR2) {
+	//	int v = atoi( message.data );
+	//	lights_hw[0].targetLevel = v;
+	//	//lights_hw[0].current = v;
+	//} 
 }
 
