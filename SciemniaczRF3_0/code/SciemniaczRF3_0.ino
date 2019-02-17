@@ -23,18 +23,20 @@
 //#define STR(macro) QUOTE(macro)
 
 #define NODE_NAME		"Dimm. Light Switch"
-#define NODE_VER		"3.26-200" STR(MY_RF24_PA_LEVEL)
+#define NODE_VER		"3.28-200" STR(MY_RF24_PA_LEVEL)
 //MY_RF24_PA_LEVEL
 // .192 - reset on errors
 // .193 - very long impuls (whole period)
 // .195 - reset on error fixes, on sending, power level
 // .2 multifunctional clicks/switch
 // .22 multifunctional clicks/switch - long/click/double/triple
-// .26	- config for multifunctional clicks/switch cfg params s/l	(18472/824)
+// .27	- config for multifunctional clicks/switch cfg params s/l	(18472/824)
 //		- config for multifunctional LONG, no reset level set to 280ms, fixes
 //		- multiclick fixes time click, reset on 5-click, heartbreak, fixed autoreset
 //		- bell mode
 //		- reduced to 50 steps
+// .28	- auto reset detection fixed
+//		- resend Switch DIMM value
 
 #define CHILD_ID_LIGHT_SENSOR	0
 #define CHILD_ID_DIMMER			10
@@ -744,10 +746,10 @@ void checkConnection() {
 		  _event = EV_NOT_SEND;
 	  }
 
-	  if(!sendHeartbeat(true)) {
-		  pingErrors++;
-		  _reqExpected++;
-	  }
+	  _reqExpected++;
+	  if(!sendHeartbeat(true)) { // zle zle gdy nie dziala tylko odbior
+		  pingErrors++;		  
+	  }	  
 
 	  if(MaxLights > 0) {
 		  //_reqExpected++;// = 3;
@@ -1033,6 +1035,15 @@ void receive(const MyMessage &message) {
 			}
 		}
 
+	}
+	idx  = message.sensor - CHILD_ID_SELECTOR;
+	if(idx < MaxSwitches) {
+		if(strlen(message.data)>0 ) {
+			if (message.type == V_DIMMER) {
+				press_action[idx] = atoi( message.data );
+				startPress[idx] = now - 1000;
+			}
+		}
 	}
 	if (message.type == V_VAR1 || message.type == V_CUSTOM) {
 	  if(strlen(message.data) == 0) {
